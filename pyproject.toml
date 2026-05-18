@@ -1,0 +1,16 @@
+[project]
+name = "storage"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "aiofiles>=25.1.0",
+    "cryptg>=0.6.0",
+    "pathvalidate>=3.3.1",
+    "python-dotenv>=1.2.2",
+    "telethon>=1.43.2",
+    "aiohttp>=3.13.5",
+    "camoufox>=0.4.11",
+    "tqdm>=4.67.3"
+]

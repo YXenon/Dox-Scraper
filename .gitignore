@@ -1,0 +1,7 @@
+.env
+.venv
+test.py
+.vscode
+temp
+**/__pycache__
+dox.session

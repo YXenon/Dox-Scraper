@@ -1,0 +1,1 @@
+PROVIDER = "https://megaplay.buzz/stream"
