@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 from pathlib import Path
 import typing
 import http.server
@@ -8,9 +9,11 @@ import aiohttp
 from aiohttp.typedefs import LooseHeaders
 from camoufox.async_api import BrowserContext # type: ignore
 from urllib.parse import urlparse, parse_qs, quote
-from tqdm.asyncio import tqdm
 from tqdm import trange
+from tqdm.asyncio import tqdm
 from os import remove
+
+from scraper.config import PROVIDER_ORIGIN
 
 
 class PortHandler(http.server.BaseHTTPRequestHandler):
@@ -69,7 +72,6 @@ class Scraper:
         self.current_file_dir = DEFAULT_FILE_DIR
         self.metadata = DEFAULT_METADATA
         self.media_found = False
-        self._client_session = aiohttp.ClientSession()
 
     async def _load_m3u8_playlist(self, response):
         url = str(response.url)
@@ -104,10 +106,10 @@ class Scraper:
             "Accept": "*/*",
             "Accept-Language": "en-US,en;q=0.9",
             "Accept-Encoding": "gzip, deflate",
-            "Origin": "https://megaplay.buzz",
+            "Origin": PROVIDER_ORIGIN,
             "Sec-GPC": "1",
             "Connection": "keep-alive",
-            "Referer": "https://megaplay.buzz/",
+            "Referer": PROVIDER_ORIGIN,
             "Sec-Fetch-Dest": "empty",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "cross-site",
@@ -121,7 +123,7 @@ class Scraper:
             return
         
         file_path = self.current_file_dir / f"{self.current_file_name}.ts"
-        sem = asyncio.Semaphore(25)
+        sem = asyncio.Semaphore(75)
 
         async def temp_fetch_and_write(url: str, multiplier: int, bar: tqdm):
             try:
@@ -150,14 +152,18 @@ class Scraper:
                 )
             )
 
-        async with aiofiles.open(file_path, "a+b") as file:
+        with open(file_path, "ab") as file:
             for i in trange(len(urls), desc="=> Merging ", unit="file"):
                 temp_file_path = (self.current_file_dir / f"temp_{i}.ts")
-                async with aiofiles.open(
-                    temp_file_path.resolve(), "r+b"
+                with open(
+                    temp_file_path.resolve(), "rb"
                 ) as temp:
-                    data = await temp.read()
-                    await file.write(data)
+                    data = temp.read()
+                    file.write(data)
+        # print("=> Merging files")
+        # temp_files = [(self.current_file_dir / f"temp_{i}.ts").as_posix() for i in range(len(urls))]
+        # with open(file_path, "wb") as out:
+        #     subprocess.run(["cat", *temp_files], stdout=out, check=True)
 
         self.metadata["video"] = file_path.as_posix()
 
@@ -169,29 +175,31 @@ class Scraper:
         self.media_found = False
         self.current_file_dir = DEFAULT_FILE_DIR
         self.metadata = DEFAULT_METADATA
-        await self._client_session.close()
 
     async def _request_interception(self, response):
         await self._load_m3u8_playlist(response)
 
-    async def scrape(self, url: dict, ctx: BrowserContext):
-        await ctx.new_page()  # just to preserve the browser and context
+    async def scrape(self, url: dict, ctx: BrowserContext, client_session: aiohttp.ClientSession):
+        try:
+            self.current_file_name = url["name"]
+            page = await ctx.new_page()
+            page.on("response", self._request_interception)
 
-        self.current_file_name = url["name"]
-        page = await ctx.new_page()
-        page.on("response", self._request_interception)
+            await page.goto(f"http://localhost:8280?url={quote(url["url"])}")
+            await page.wait_for_load_state("domcontentloaded")
+            await asyncio.sleep(5)
+            await page.close()
 
-        await page.goto(f"http://localhost:8280?url={quote(url["url"])}")
-        await page.wait_for_load_state("domcontentloaded")
-        await asyncio.sleep(5)
-        await page.close()
+            await self._fetch_urls_and_write(client_session)
 
-        await self._fetch_urls_and_write(self._client_session)
+            metadata = self.metadata
+            found = self.media_found
 
-        metadata = self.metadata
+            await self._cleanup()
 
-        await self._cleanup()
-
-        if self.media_found:
-            return metadata
-        return None
+            if found:
+                return metadata
+            return None
+        except Exception as e:
+            print(e)
+            return None

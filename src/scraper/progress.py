@@ -11,10 +11,9 @@ class ProgressTracker:
         
         self.location.parent.mkdir(parents=True, exist_ok=True)
         
-    def save(self, page: int, item: int | None, items: typing.List | None):
+    def save(self, page: int, items: typing.List | None):
         save_data = {
             "page": page,
-            "item": item,
             "items": items
         }
         with open(self.location.resolve(), "w", encoding="utf-8") as file:
@@ -22,7 +21,7 @@ class ProgressTracker:
     
     def load(self):
         if not self.location.exists():
-            return 1, None, None
+            return 1, []
         with open(self.location.resolve(), "r", encoding="utf-8") as file:
             saved_data = json.load(file)
-            return saved_data["page"] or 1, saved_data["item"], saved_data["items"]
+            return saved_data["page"] or 1, saved_data["items"]
