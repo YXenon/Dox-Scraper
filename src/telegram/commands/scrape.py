@@ -16,7 +16,7 @@ Invalid parameters. Please follow the following pattern:
 **Required:**
 `[provider]` → registered provider name
 `[url]` → url for scraping
-`[anilist id]` → get the anime id from https://anilist.co/search/anime
+`[anilist id]` → get the anime id from `https://anilist.co/search/anime`
 
 **Optional:**
 `[episode]` → episode no (optional) 
@@ -80,7 +80,7 @@ async def scrape(event: Message, client: TelegramClient):
                 )
 
                 app_ctx.scrape_q.put(data)
-                await event.respond(success_str+f"**Provider:** {provider}\n**Url:**{url}\n**Anilist id:** {anilist_id}\n**Episode no:** {episode}\n**Content type:** {content_type}")
+                await event.respond(success_str+f"**Provider:** {provider}\n**Url:** `{url}`\n**Anilist id:** {anilist_id}\n**Episode no:** {episode}\n**Content type:** {content_type}")
 
     else:
         await event.respond(help_str)

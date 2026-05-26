@@ -133,6 +133,7 @@ async def _scrape_convert_and_upload(
     Returns True on success (or when no metadata was returned), False if the
     upload step fails so the caller can decide whether to abort.
     """
+
     scraper = Scraper()
     metadata = await scraper.scrape(entry, browser_ctx, session)
 
@@ -207,6 +208,8 @@ async def _requested_scraping(
 
     Returns False if the anime could not be found or the provider is unsupported.
     """
+    logger.info("New manual scrape request from Telegram")
+
     if request.provider != "anikoto":
         logger.warning("Unsupported provider: %s", request.provider)
         return False
@@ -219,7 +222,7 @@ async def _requested_scraping(
     entry = URLBuilder().build_episode_entry(
         anime_info, request.episode, request.content_type
     )
-    return await _scrape_convert_and_upload(entry, ctx, session, anime_info)
+    return await _scrape_convert_and_upload(entry, ctx, session, {"info": anime_info})
 
 
 # ---------------------------------------------------------------------------
@@ -247,16 +250,19 @@ async def scrape_job() -> None:
         ) as browser,
         aiohttp.ClientSession() as session,
     ):
-        ctx = await browser.new_context()
+        try:
+            ctx = await browser.new_context()
 
-        while True:
-            if app_ctx.scrape_q.empty():
-                await asyncio.sleep(1)
-                continue
+            while True:
+                if app_ctx.scrape_q.empty():
+                    await asyncio.sleep(1)
+                    continue
 
-            item: ScrapingRequests = app_ctx.scrape_q.get_nowait()
+                item: ScrapingRequests = app_ctx.scrape_q.get_nowait()
 
-            if item.mode == "auto":
-                await _auto_scraping(ctx, session)
-            else:
-                await _requested_scraping(ctx, session, item)
+                if item.mode == "auto":
+                    await _auto_scraping(ctx, session)
+                else:
+                    await _requested_scraping(ctx, session, item)
+        finally:
+            pass

@@ -1,3 +1,5 @@
+import traceback
+
 import aiohttp
 
 
@@ -39,7 +41,6 @@ ANILIST_GENERATOR_QUERY = """
 ANILIST_FIND_QUERY = """
     query($id: Int) {
         Media(id: $id, type: ANIME) {
-            episodes
                 id
                 idMal
                 type
@@ -110,9 +111,12 @@ class Anilist:
                     headers={"Content-Type": "application/json"},
                 )
                 data = await response.json()
-                anime_list = data["data"]["Page"]["media"]
-
-                return anime_list
+                if data:
+                    anime_list = data["data"]["Media"]
+                    return anime_list
+                
+                return None
 
             except Exception:
+                print(traceback.format_exc())
                 return None

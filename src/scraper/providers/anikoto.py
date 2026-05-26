@@ -61,9 +61,9 @@ class URLBuilder:
         """
         anime_id        = anime["id"]
         sanitized_title = sanitize_filename(anime["title"]["english"]).replace(" ", "_")
-        if not episode=="" or episode==0:
+        if episode in ('', 0):
             name            = f"{anime_id}_{sanitized_title}_{content_type}"
-        elif content_type=="":
+        elif content_type=='':
             name            = f"{anime_id}_{sanitized_title}_episode_{episode}"
         else:
             name            = f"{anime_id}_{sanitized_title}_episode_{episode}_{content_type}"
