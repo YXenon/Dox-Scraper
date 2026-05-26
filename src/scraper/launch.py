@@ -179,7 +179,8 @@ async def _auto_scraping(ctx: BrowserContext, session: aiohttp.ClientSession) ->
 
     for i, anime in enumerate(anime_list[index:]):
         entries = anime["entries"]
-        for j, entry in enumerate(entries):
+        entry_index = anime["index"]
+        for j, entry in enumerate(entries[entry_index:]):
             logger.info(
                 "Scrape job: [entry %s/%s | anime %s/%s]",
                 j + 1,
@@ -189,8 +190,8 @@ async def _auto_scraping(ctx: BrowserContext, session: aiohttp.ClientSession) ->
             )
             success = await _scrape_convert_and_upload(entry, ctx, session, anime)
             if success:
-                tracker.save(page, _compute_remaining_track(anime_list, i, j+1), i)
-        tracker.save(page, anime_list, i+1)
+                tracker.save(page, _compute_remaining_track(anime_list, i, entry_index+j+1), i)
+        tracker.save(page, anime_list, index+i+1)
 
     tracker.save(page + 1, None, 0)
 
