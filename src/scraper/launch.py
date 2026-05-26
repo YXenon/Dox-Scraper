@@ -184,9 +184,9 @@ async def _auto_scraping(ctx: BrowserContext, session: aiohttp.ClientSession) ->
             logger.info(
                 "Scrape job: [entry %s/%s | anime %s/%s]",
                 j + 1,
-                len(entries),
+                len(entries[entry_index:]),
                 i + 1,
-                len(anime_list),
+                len(anime_list[index:]),
             )
             success = await _scrape_convert_and_upload(entry, ctx, session, anime)
             if success:
