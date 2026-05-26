@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 from shutil import which
 
-from shared.metadata import Metadata
+from shared.models import Metadata
 
 
 # ---------------------------------------------------------------------------

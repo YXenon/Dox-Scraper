@@ -1,6 +1,6 @@
 from telethon import TelegramClient
 
-from .constants import API_ID, API_HASH
+from constants import API_ID, API_HASH
 
 # ---------------------------------------------------------------------------
 # Telegram client

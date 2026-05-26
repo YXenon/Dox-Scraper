@@ -2,32 +2,39 @@ import asyncio
 import copy
 import logging
 import shutil
-from pathlib import Path
 import traceback
+from pathlib import Path
 from typing import Any
 
 import aiohttp
-from aiohttp.typedefs import LooseHeaders
 from camoufox import AsyncCamoufox
+from playwright.async_api import BrowserContext
 
-from shared.metadata import Metadata
-from shared.model import TelegramFile
+from shared.models import Metadata, RequestedMode, ScrapingRequests, TelegramFile
 from shared.mongo import init_mongo
 
-from .anilist import AnilistGenerator
+from .anilist import Anilist
 from .converter import convert
 from .progress import ProgressTracker
 from .proxy import ProxyServer
-from .providers.anikoto import URLBuilder, HLSScraper
+from .providers.anikoto import URLBuilder, Scraper
 from core.handlers.process import app_ctx
 
-TEMP_DIR = Path("./temp")
-RECORD_FILE = Path("record.json")
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+TEMP_DIR     = Path("./temp")
+RECORD_FILE  = Path("record.json")
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def _clear_temp() -> None:
-    """Removes the temp directory if it exists."""
+    """Remove the temp directory and all its contents if it exists."""
     try:
         shutil.rmtree(TEMP_DIR)
     except FileNotFoundError:
@@ -36,128 +43,200 @@ def _clear_temp() -> None:
 
 async def _load_or_generate_anime_list(
     tracker: ProgressTracker,
-) -> tuple[int, list, str]:
-    """Returns saved progress if available, otherwise generates a fresh anime list."""
+) -> tuple[int, list]:
+    """
+    Return saved progress if available, otherwise generate a fresh anime list.
+
+    Each item in the returned list has the shape::
+
+        {"info": <anilist dict>, "entries": <list of episode entry dicts>}
+    """
     page, items = tracker.load()
     if items:
-        origin = URLBuilder().origin()
-        return page, items, origin
-    r_anime_list = await AnilistGenerator(page, 1).generate()
-    entries, origin = URLBuilder(anime_list=r_anime_list).build()
+        return page, items
 
-    anime_list: list[dict[str, list[dict[str, str]] | dict[str, Any]]] = []
-    for data, entry in zip(r_anime_list, entries):
-        anime_list.append({"info": data, "entries": entry})
+    raw_anime_list = await Anilist().generate(page, 1)
+    grouped_entries = URLBuilder(anime_list=raw_anime_list).build()
 
-    return page, anime_list, origin
+    anime_list: list[dict[str, list[dict[str, str]] | dict[str, Any]]] = [
+        {"info": data, "entries": entry}
+        for data, entry in zip(raw_anime_list, grouped_entries)
+    ]
+    return page, anime_list
 
 
 async def _upload_to_telegram(metadata: Metadata) -> tuple[bool, Any, Any]:
-    """Sends metadata to the Telegram uploader process. Returns True if successful."""
+    """
+    Serialize metadata and send it to the Telegram uploader process via a queue.
+
+    Blocks until the uploader acknowledges completion on the ok queue.
+
+    Returns
+    -------
+    success    : True when the uploader reports job=upload, status=done.
+    channel_id : Telegram channel ID the file was sent to.
+    msg_id     : Message ID of the uploaded file.
+    """
     loop = asyncio.get_event_loop()
-    app_ctx.data_q.put(metadata.model_dump_json())  # Sending serialized data
-    response: dict = await loop.run_in_executor(None, app_ctx.ok_q.get)
+    app_ctx.scraper_conn.send(metadata.model_dump_json())
+    response: dict = await loop.run_in_executor(None, app_ctx.scraper_conn.recv)
 
-    return (
-        response.get("job") == "upload" and response.get("status") == "done",
-        response.get("channel_id"),
-        response.get("msg_id"),
-    )
+    success = response.get("job") == "upload" and response.get("status") == "done"
+    return success, response.get("channel_id"), response.get("msg_id")
 
 
-def _download_headers(provider_origin: str) -> LooseHeaders:
+def _compute_remaining_track(anime_list: list, anime_index: int, entry_index: int) -> list:
     """
-    Build HTTP request headers for downloading from a streaming provider.
+    Return a deep-copied slice of ``anime_list`` starting from the entry that
+    follows ``entry_index`` within ``anime_index``.
 
-    ``Origin`` and ``Referer`` are set dynamically so the same function works
-    across different provider origins without duplicating header blocks.
+    If the current anime has no remaining entries after the slice, the next
+    anime in the list is used as the starting point instead.
     """
-    return {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate",
-        "Origin": provider_origin,
-        "Referer": provider_origin,
-        "Connection": "keep-alive",
-        "Sec-GPC": "1",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "cross-site",
-    }
+    remaining = copy.deepcopy(anime_list)
+    remaining[anime_index]["entries"] = remaining[anime_index]["entries"][entry_index:]
+
+    if remaining[anime_index]["entries"]:
+        return remaining[anime_index:]
+    return remaining[anime_index + 1:]
 
 
-def compute_track(anime_list: list, i: int, j: int):
-    temp = copy.deepcopy(anime_list)
-    temp[i]["entries"] = temp[i]["entries"][j:]
-    if len(temp[i]["entries"]):
-        return temp[i:]
-    return temp[i + 1 :]
+async def _scrape_convert_and_upload(
+    entry: dict,
+    browser_ctx: BrowserContext,
+    session: aiohttp.ClientSession,
+    anilist_info: dict,
+) -> bool:
+    """
+    Run the full pipeline for a single episode entry:
+      1. Scrape HLS chunks from the provider page.
+      2. Merge and convert to MKV.
+      3. Upload to Telegram.
+      4. Persist the file reference in MongoDB.
 
+    Returns True on success (or when no metadata was returned), False if the
+    upload step fails so the caller can decide whether to abort.
+    """
+    scraper  = Scraper()
+    metadata = await scraper.scrape(entry, browser_ctx, session)
+
+    if not metadata:
+        logger.info("No metadata received for entry: %s", entry.get("name"))
+        return True
+
+    logger.info("Merging & converting to MKV")
+    metadata = await convert(metadata)
+
+    logger.info("Sending data to uploader process")
+    success, channel_id, msg_id = await _upload_to_telegram(metadata)
+
+    if not success:
+        logger.warning("Uploader reported failure for entry: %s", entry.get("name"))
+        return False
+
+    # Build search query tokens from the output filename stem.
+    queries: list[str] = Path(metadata.video).stem.split("_")
+    try:
+        await TelegramFile(
+            channel_id=channel_id,
+            msg_id=msg_id,
+            queries=queries,
+            anilist_id=anilist_info["info"]["id"],
+        ).create()
+        logger.info("Saved to DB")
+    except Exception:
+        logger.error("[mongo] Error saving to DB:")
+        print(traceback.format_exc())
+
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Scraping modes
+# ---------------------------------------------------------------------------
+
+async def _auto_scraping(ctx: BrowserContext, session: aiohttp.ClientSession) -> None:
+    """
+    Iterate over a generated (or resumed) anime list and scrape every episode.
+
+    Progress is saved after each successful entry so the job can be resumed
+    if interrupted. When the list is exhausted the page counter is incremented.
+    """
+    tracker = ProgressTracker(RECORD_FILE)
+    page, anime_list = await _load_or_generate_anime_list(tracker)
+
+    for i, anime in enumerate(anime_list):
+        entries = anime["entries"]
+        for j, entry in enumerate(entries):
+            logger.info(
+                "Scrape job: [entry %s/%s | anime %s/%s]",
+                j + 1, len(entries),
+                i + 1, len(anime_list),
+            )
+            success = await _scrape_convert_and_upload(entry, ctx, session, anime)
+            if success:
+                tracker.save(page, _compute_remaining_track(anime_list, i, j))
+
+    tracker.save(page + 1, None)
+
+
+async def _requested_scraping(
+    ctx: BrowserContext,
+    session: aiohttp.ClientSession,
+    request: RequestedMode,
+) -> bool:
+    """
+    Scrape a single user-requested episode.
+
+    Returns False if the anime could not be found or the provider is unsupported.
+    """
+    if request.provider != "anikoto":
+        logger.warning("Unsupported provider: %s", request.provider)
+        return False
+
+    anime_info = await Anilist().find(ani_id=request.anilist_id)
+    if not anime_info:
+        logger.warning("Anilist entry not found for ID: %s", request.anilist_id)
+        return False
+
+    entry = URLBuilder().build_episode_entry(anime_info, request.episode, request.content_type)
+    return await _scrape_convert_and_upload(entry, ctx, session, anime_info)
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 async def scrape_job() -> None:
     """
-    Main scrape job: loads or generates an anime list, scrapes each entry,
-    converts media to MKV, and uploads to Telegram. Saves progress throughout.
+    Main scraping loop.
+
+    Sets up the proxy server and browser, then continuously polls the scrape
+    queue and dispatches to either automatic or requested scraping mode.
     """
     _clear_temp()
     await init_mongo()
-
-    tracker = ProgressTracker(RECORD_FILE)
-    page, anime_list, origin = await _load_or_generate_anime_list(tracker)
-    headers = _download_headers(origin)
 
     server = ProxyServer()
     server.launch()
 
     async with (
         AsyncCamoufox(
-            headless=True, firefox_user_prefs={"media.volume_scale": "0.0"}
+            headless=True,
+            firefox_user_prefs={"media.volume_scale": "0.0"},
         ) as browser,
         aiohttp.ClientSession() as session,
     ):
-        ctx = await browser.new_context()  # type: ignore
-        for i, anime in enumerate(anime_list):
-            entries = anime["entries"]
-            for j, entry in enumerate(entries):
+        ctx = await browser.new_context()
 
-                logger.info(
-                    "Scrape Job: (%s/%s) (%s/%s)",
-                    j + 1,
-                    len(entries),
-                    i+1,
-                    len(anime_list)
-                )
+        while True:
+            if app_ctx.scrape_q.empty():
+                await asyncio.sleep(1)
+                continue
 
-                scraper = HLSScraper(headers)
-                metadata = await scraper.scrape(entry, ctx, session)
+            item: ScrapingRequests = app_ctx.scrape_q.get_nowait()
 
-                if metadata:
-                    logger.info("Merging & converting to MKV")
-                    metadata = await convert(metadata)
-
-                    logger.info("Sending data to uploader process")
-                    success, channel_id, msg_id = await _upload_to_telegram(metadata)
-                    if success:
-                        queries: list[str] = Path(metadata.video).stem.split("_")
-                        try:
-                            await TelegramFile(
-                                channel_id=channel_id,
-                                msg_id=msg_id,
-                                queries=queries,
-                                anilist=anime["info"],
-                            ).create()
-                            logger.info("Saved to DB")
-                        except Exception:
-                            logger.error("[mongo] Error saving to db, follow the log msg below:")
-                            print(traceback.format_exc())
-                    else:
-                        logger.warning("Issue with uploader")
-                        break
-                else:
-                    logger.info("No metadata received!")
-
-                tracker.save(page, compute_track(anime_list, i, j))
-
-    server.stop()
-    tracker.save(page + 1, None)
+            if item.mode == "auto":
+                await _auto_scraping(ctx, session)
+            else:
+                await _requested_scraping(ctx, session, item)

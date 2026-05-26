@@ -1,5 +1,5 @@
 import multiprocessing
-from multiprocessing import Manager, Process
+from multiprocessing import Manager, Process, Pipe
 
 # ---------------------------------------------------------------------------
 # AppContext
@@ -13,7 +13,7 @@ class AppContext:
     ------
     cmd_q  : commands sent to the main process (stop, restart).
     data_q : arbitrary data payloads between processes.
-    ok_q   : acknowledgement / status signals.
+    ack_q   : acknowledgement / status signals.
 
     Lifecycle
     ---------
@@ -27,10 +27,10 @@ class AppContext:
     def __init__(self) -> None:
         self._manager = Manager()
 
-        # Inter-process communication queues (manager-backed, safe across PIDs).
+        # Inter-process communication queues, and pipes (manager-backed, safe across PIDs).
         self.cmd_q  = self._manager.Queue()  # commands → main process
-        self.data_q = self._manager.Queue()  # data payloads
-        self.ok_q   = self._manager.Queue()  # acknowledgement signals
+        self.scraper_conn, self.uploader_conn = Pipe() # duplex for scraper and uploader to contact
+        self.scrape_q = self._manager.Queue() # for calling scraper with payloads
 
         # Keyed by process name.
         self.processes: dict[str, Process]                             = {}

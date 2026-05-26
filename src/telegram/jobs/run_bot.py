@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 
 from ..bot import client
-from ..constants import BOT_TOKEN
+from constants import BOT_TOKEN
 from ..handlers.commands import loadCommands
 
 # The commands directory lives one level above this file's parent package.

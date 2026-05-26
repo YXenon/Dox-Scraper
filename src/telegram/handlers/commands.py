@@ -24,8 +24,16 @@ def Command(name: str, allowed: list[int] | None = None):
 
 def loadCommands(mainDir: Path):
     logger = logging.getLogger(__name__)
-    path = Path(mainDir).resolve() / "commands" # initialized from main.py file
-    cmds = list(filter(lambda x: x.name != "__init__.py" and (not x.name.startswith("h_")) and x.suffix == ".py" and x.is_file(), path.glob("*.py")))
+    path = Path(mainDir).resolve() / "commands" # mainDir should point to the parent dir of 'commands'
+    cmds = list(
+                filter(
+                    lambda x:
+                    x.name != "__init__.py"
+                    and (not x.name.startswith("h_")),
+                    path.glob("*.py")
+                )
+            )
+    
     for cmd in cmds:
         import_module(f"telegram.commands.{cmd.stem}")
     logger.info("Commands initialized on Telegram")

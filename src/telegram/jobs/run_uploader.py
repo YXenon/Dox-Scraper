@@ -4,7 +4,6 @@ import logging
 import mimetypes
 import shutil
 import subprocess
-import base64
 import io
 from random import uniform
 from pathlib import Path
@@ -17,10 +16,11 @@ from telethon.tl.types import (
     UpdateMessageID,
 )
 
-from shared.metadata import Metadata
+from shared.models import Metadata
 from telegram.bot import client
-from telegram.constants import STORE_CHANNEL_ID
+from constants import STORE_CHANNEL_ID
 from telegram.utils.parallel import UploadManager
+from core.handlers.process import app_ctx
 
 # ---------------------------------------------------------------------------
 # Types
@@ -100,7 +100,7 @@ def get_msg_id(result: list):
 # Upload worker
 # ---------------------------------------------------------------------------
 
-async def upload_to_telegram(ctx) -> None:
+async def upload_to_telegram() -> None:
     """
     Consume video metadata from the data queue and upload each file to Telegram.
 
@@ -117,10 +117,10 @@ async def upload_to_telegram(ctx) -> None:
     # Wait for the dependent process to be fully started before consuming work.
     logger = logging.getLogger(__name__)
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, ctx.wait_for, "p2")
+    await loop.run_in_executor(None, app_ctx.wait_for, "p2")
 
     while True:
-        s_metadata = await loop.run_in_executor(None, ctx.data_q.get)
+        s_metadata = await loop.run_in_executor(None, app_ctx.uploader_conn.recv)
         metadata = Metadata.model_validate_json(s_metadata)
         logger.info("Received data at uploader process")
         video_path = Path(metadata.video)
@@ -158,12 +158,7 @@ async def upload_to_telegram(ctx) -> None:
         )
 
         # Acknowledge completion so the coordinator can proceed.
-        ctx.ok_q.put({"job": "upload", "status": "done", "channel_id": STORE_CHANNEL_ID, "msg_id": get_msg_id(result)}, timeout=10)
+        app_ctx.uploader_conn.send({"job": "upload", "status": "done", "channel_id": STORE_CHANNEL_ID, "msg_id": get_msg_id(result)})
 
         # Clean up the working directory now that the upload is confirmed.
         shutil.rmtree(video_path.parent)
-
-
-def upload_job(ctx) -> None:
-    """Entry point for the upload worker process; runs the async loop synchronously."""
-    asyncio.run(upload_to_telegram(ctx))

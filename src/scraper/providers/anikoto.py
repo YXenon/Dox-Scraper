@@ -2,19 +2,16 @@ import asyncio
 import logging
 import shutil
 import traceback
-import typing
 from pathlib import Path
 from urllib.parse import quote
 
 import aiofiles
 import aiohttp
-from aiohttp.typedefs import LooseHeaders
 from camoufox.async_api import BrowserContext  # type: ignore
 from pathvalidate import sanitize_filename
 from tqdm.asyncio import tqdm
-from typing import Tuple
 
-from shared.metadata import Metadata
+from shared.models import Metadata
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -47,10 +44,9 @@ class URLBuilder:
         self.anime_list: list[dict] = anime_list if anime_list is not None else []
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Public API
     # ------------------------------------------------------------------
-
-    def _build_episode_entry(
+    def build_episode_entry(
         self,
         anime: dict,
         episode: int,
@@ -68,11 +64,7 @@ class URLBuilder:
         url             = f"{PROVIDER}/{anime_id}/{episode}/{content_type}"
         return {"name": name, "url": url}
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def build(self) -> Tuple[list[list[dict[str, str]]], str]:
+    def build(self) -> list[list[dict[str, str]]]:
         """
         Generate all sub/dub episode entries grouped by anime.
 
@@ -91,37 +83,42 @@ class URLBuilder:
                 continue
 
             anime_entries: list[dict[str, str]] = [
-                self._build_episode_entry(anime, episode, content_type)
+                self.build_episode_entry(anime, episode, content_type)
                 for episode in range(1, int(anime["episodes"]) + 1)
                 for content_type in CONTENT_TYPES
             ]
             entries.append(anime_entries)
 
-        return entries, PROVIDER_ORIGIN
-
-    def origin(self) -> str:
-        """Return the base origin URL of the streaming provider."""
-        return PROVIDER_ORIGIN
+        return entries
 
 
-# ---------------------------------------------------------------------------
-# HLSScraper
-# ---------------------------------------------------------------------------
 
-class HLSScraper:
+class Scraper:
     """
     Intercepts HLS (.m3u8) streams and subtitle (.vtt) files loaded by a
     Camoufox browser page, downloads all TS chunks in parallel, and records
     metadata about the resulting files for downstream processing.
     """
 
-    def __init__(self, headers: LooseHeaders) -> None:
+    def __init__(self) -> None:
         self._chunk_urls:    list[str]   = []
         self._current_title: str         = ""
         self._output_dir:    Path | None = None
         self._metadata:      Metadata    = Metadata()
         self._media_found:   bool        = False
-        self._headers:       LooseHeaders = headers
+        self._headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:149.0) Gecko/20100101 Firefox/149.0",
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate",
+            "Origin": PROVIDER_ORIGIN,
+            "Referer": PROVIDER_ORIGIN,
+            "Connection": "keep-alive",
+            "Sec-GPC": "1",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "cross-site",
+    }
         self._logger = logging.getLogger(__name__)
 
     # ------------------------------------------------------------------
@@ -207,18 +204,20 @@ class HLSScraper:
 
         async def download_chunk(url: str, index: int, progress_bar: tqdm) -> None:
             temp_path = self._output_dir / f"temp_{index}.ts"
-            try:
-                async with semaphore:
-                    async with aiofiles.open(temp_path, "w+b") as f:
-                        response = await session.get(url, headers=self._headers)
-                        data     = await response.read()
-                        await f.write(data)
-                        await f.flush()
-            except Exception:
-                self._logger.error("[chunk %s] Download failed:", index)
-                print(traceback.format_exc())
-            finally:
-                progress_bar.update(1)
+            for _ in range(_MAX_ATTEMPTS):
+                try:
+                    async with semaphore:
+                        async with aiofiles.open(temp_path, "w+b") as f:
+                            response = await session.get(url, headers=self._headers)
+                            data     = await response.read()
+                            await f.write(data)
+                            await f.flush()
+
+                    progress_bar.update(1)
+                    break
+                except Exception:
+                    self._logger.error("[chunk %s] Download failed:", index)
+                    print(traceback.format_exc())
 
         with tqdm(total=len(self._chunk_urls), unit="chunks", desc="Downloading") as bar:
             await asyncio.gather(
@@ -277,7 +276,7 @@ class HLSScraper:
                 if self._media_found:
                     return metadata
 
-                # No video stream detected; remove any subtitle-only temp directory.
+                # No video stream detected; remove any temp directory.
                 if metadata.dir:
                     shutil.rmtree(metadata.dir)
                 return None
