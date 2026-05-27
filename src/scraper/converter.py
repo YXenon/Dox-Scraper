@@ -2,6 +2,9 @@ import asyncio
 import subprocess
 from pathlib import Path
 from shutil import which
+import traceback
+
+import aiofiles
 
 from shared.models import Metadata
 
@@ -55,23 +58,24 @@ def _build_merge_command(
     return cmd
 
 
-def _write_parts_list(parts_file: Path, part_count: int) -> None:
+async def _write_parts_list(parts_file: Path, part_count: int) -> None:
     """
     Write a FFmpeg concat-format file listing all .ts segment filenames.
 
     Produces lines of the form ``temp_0.ts``, ``temp_1.ts``, … up to
     ``part_count - 1``.
     """
-    with open(parts_file.resolve(), "w", encoding="utf-8") as f:
+    print(parts_file.resolve())
+    async with aiofiles.open(parts_file.resolve(), "w", encoding="utf-8") as f:
         for i in range(part_count):
-            f.write(f"file 'temp_{i}.ts'\n")
+            await f.write(f"file 'temp_{i}.ts'\n")
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-async def convert(metadata: Metadata) -> Metadata:
+async def convert(metadata: Metadata) -> Metadata | None:
     """
     Merge segmented .ts video parts and VTT subtitles into a single output file.
 
@@ -88,26 +92,33 @@ async def convert(metadata: Metadata) -> Metadata:
     RuntimeError            : FFmpeg is not installed.
     subprocess.CalledProcessError : FFmpeg merge command fails.
     """
-    if not which("ffmpeg"):
-        raise RuntimeError("FFmpeg is not installed on the system.")
+    try:
+        if not which("ffmpeg"):
+            raise RuntimeError("FFmpeg is not installed on the system.")
 
-    # Build and write the concat list that FFmpeg will read.
-    parts_list_file = Path(metadata.dir) / "files.txt"
-    _write_parts_list(parts_list_file, int(metadata.parts))
+        loop = asyncio.get_event_loop()
+        # Build and write the concat list that FFmpeg will read.
+        parts_list_file = Path(metadata.dir) / "files.txt"
+        await _write_parts_list(parts_list_file, int(metadata.parts))
 
-    output_path = Path(metadata.video)
+        output_path = Path(metadata.video)
 
-    # Convert all subtitles; silently drop any that ffmpeg cannot process.
-    srt_subtitles = [
-        srt
-        for subtitle in metadata.subtitles
-        if (srt := _convert_vtt_to_srt(subtitle)) is not None
-    ]
+        # Convert all subtitles; silently drop any that ffmpeg cannot process.
+        srt_subtitles = [
+            srt
+            for subtitle in metadata.subtitles
+            if (srt := await loop.run_in_executor(None, _convert_vtt_to_srt, subtitle)) is not None
+        ]
 
-    merge_cmd = _build_merge_command(
-        parts_list_file.as_posix(),
-        srt_subtitles,
-        output_path.as_posix(),
-    )
-    subprocess.run(merge_cmd, check=True, capture_output=True, text=True)
-    return metadata
+        merge_cmd = _build_merge_command(
+            parts_list_file.as_posix(),
+            srt_subtitles,
+            output_path.as_posix(),
+        )
+        await loop.run_in_executor(
+            None,
+            lambda: subprocess.run(merge_cmd, check=True, capture_output=True, text=True)
+        )
+        return metadata
+    except Exception:
+        print(traceback.format_exc())

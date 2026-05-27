@@ -95,7 +95,6 @@ async def _scrape_convert_and_upload(
 ) -> bool:
     scraper = Scraper()
     metadata = await scraper.scrape(entry, browser_ctx, session)
-
     if not metadata:
         logger.info("No metadata for entry: %s", entry.get("name"))
         return False

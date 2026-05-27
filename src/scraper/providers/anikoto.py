@@ -177,6 +177,7 @@ class Scraper:
         if self._output_dir is None:
             self._output_dir = Path("./temp") / self._current_title
             self._output_dir.mkdir(exist_ok=True, parents=True)
+            self._metadata.dir = self._output_dir.as_posix()
 
     async def _save_subtitle(self, content: str, filename: str) -> None:
         """
@@ -187,7 +188,6 @@ class Scraper:
         """
         self._ensure_output_dir()
         subtitle_path = self._output_dir / f"{self._current_title}_{filename}.vtt"
-        self._metadata.dir = self._output_dir.as_posix()
 
         async with aiofiles.open(subtitle_path.resolve(), "a") as f:
             await f.write(content)
@@ -267,10 +267,11 @@ class Scraper:
         Returns None if no media was detected or an unrecoverable error occurs.
         """
         metadata = Metadata()
+        self._current_title = target["name"]
 
         for attempt in range(_MAX_ATTEMPTS):
             try:
-                self._current_title = target["name"]
+                print(target)
 
                 page = await browser_ctx.new_page()
                 page.on("response", self._on_browser_response)
