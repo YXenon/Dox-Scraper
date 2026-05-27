@@ -102,6 +102,10 @@ async def _scrape_convert_and_upload(
     logger.info("Merging & converting to MKV")
     metadata = await convert(metadata)
 
+    if not metadata:
+        logger.info("No metadata for entry: %s", entry.get("name"))
+        return False
+
     logger.info("Sending to uploader")
     success, channel_id, msg_id = await _upload_to_telegram(metadata)
 

@@ -13,6 +13,15 @@ from shared.models import Metadata
 # Helpers
 # ---------------------------------------------------------------------------
 
+
+def is_valid_vtt(path: Path) -> bool:
+    with open(path.resolve(), 'r', encoding='utf-8') as f:
+        content = f.read().strip()
+    # Must start with WEBVTT and have at least one timestamp
+    return content.startswith('WEBVTT') and '-->' in content
+
+
+
 def _convert_vtt_to_srt(subtitle_path: str) -> str | None:
     """
     Convert a single VTT subtitle file to SRT format via FFmpeg.
@@ -20,7 +29,12 @@ def _convert_vtt_to_srt(subtitle_path: str) -> str | None:
     Returns the path to the converted .srt file, or None if conversion fails.
     The .srt file is written alongside the source .vtt file.
     """
+
+    if not is_valid_vtt(Path(subtitle_path)):
+        return None
+
     srt_path = Path(subtitle_path).with_suffix(".srt").as_posix()
+
     try:
         subprocess.run(
             ["ffmpeg", "-nostdin", "-i", subtitle_path, srt_path],
@@ -65,10 +79,10 @@ async def _write_parts_list(parts_file: Path, part_count: int) -> None:
     Produces lines of the form ``temp_0.ts``, ``temp_1.ts``, … up to
     ``part_count - 1``.
     """
-    print(parts_file.resolve())
     async with aiofiles.open(parts_file.resolve(), "w", encoding="utf-8") as f:
         for i in range(part_count):
             await f.write(f"file 'temp_{i}.ts'\n")
+
 
 
 # ---------------------------------------------------------------------------
@@ -120,5 +134,6 @@ async def convert(metadata: Metadata) -> Metadata | None:
             lambda: subprocess.run(merge_cmd, check=True, capture_output=True, text=True)
         )
         return metadata
-    except Exception:
+    except subprocess.CalledProcessError as e:
+        print(e.stderr)
         print(traceback.format_exc())

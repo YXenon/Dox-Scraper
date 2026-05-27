@@ -271,8 +271,6 @@ class Scraper:
 
         for attempt in range(_MAX_ATTEMPTS):
             try:
-                print(target)
-
                 page = await browser_ctx.new_page()
                 page.on("response", self._on_browser_response)
 
