@@ -33,63 +33,64 @@ _MAX_ATTEMPTS = 20
 _BASE_PLAYER_WAIT = 5.0
 _PLAYER_WAIT_INCREMENT = 0.5
 
+
 # ---------------------------------------------------------------------------
-# URLBuilder
+# URL Builder
 # ---------------------------------------------------------------------------
 
 class URLBuilder:
     """Builds a flat list of per-anime episode stream entries."""
 
     def __init__(self, anime_list: list[dict] | None = None) -> None:
-        # Avoid the mutable-default-argument pitfall by defaulting to None.
         self.anime_list: list[dict] = anime_list if anime_list is not None else []
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
     def build_episode_entry(
         self,
         anime: dict,
-        episode: Union[int, str],
+        episode: int | str,
         content_type: str,
-    ) -> dict[str, str]:
+        url: str | None = None,
+    ) -> dict[str, str | int]:
         """
         Construct a single episode entry.
 
-        The title is sanitized and spaces are replaced with underscores so the
-        resulting name is safe to use as a filename or URL segment.
+        If ``url`` is provided it is used as-is; otherwise it is built from
+        the provider base URL + anime id + episode + content type.
         """
         anime_id        = anime["id"]
         sanitized_title = sanitize_filename(anime["title"]["english"]).replace(" ", "_")
-        if episode in ('', 0):
-            name            = f"{anime_id}_{sanitized_title}_{content_type}"
-        elif content_type=='':
-            name            = f"{anime_id}_{sanitized_title}_episode_{episode}"
+
+        if episode in ("", 0):
+            name = f"{anime_id}_{sanitized_title}_{content_type}"
+        elif content_type == "":
+            name = f"{anime_id}_{sanitized_title}_episode_{episode}"
         else:
-            name            = f"{anime_id}_{sanitized_title}_episode_{episode}_{content_type}"
+            name = f"{anime_id}_{sanitized_title}_episode_{episode}_{content_type}"
 
-        url             = f"{PROVIDER}/{anime_id}/{episode}/{content_type}"
-        return {"name": name, "url": url}
+        return {
+            "name":         name,
+            "url":          url or f"{PROVIDER}/{anime_id}/{episode}/{content_type}",
+            "episode":      episode,
+            "content_type": content_type,
+            "provider":     "anikoto",
+        }
 
-    def build(self) -> list[list[dict[str, str]]]:
+    def build(self) -> list[list[dict]]:
         """
         Generate all sub/dub episode entries grouped by anime.
-
-        Skips any anime whose episode count is falsy (None, 0, empty string).
-
-        Returns
-        -------
-        entries         : List of per-anime lists, each containing
-                          ``{"name": ..., "url": ...}`` dicts.
-        PROVIDER_ORIGIN : Base origin URL of the streaming provider.
+        Skips anime whose episode count is falsy (None, 0, empty string).
         """
-        entries: list[list[dict[str, str]]] = []
+        entries: list[list[dict]] = []
 
         for anime in self.anime_list:
             if not anime["episodes"]:
                 continue
 
-            anime_entries: list[dict[str, str]] = [
+            anime_entries = [
                 self.build_episode_entry(anime, episode, content_type)
                 for episode in range(1, int(anime["episodes"]) + 1)
                 for content_type in CONTENT_TYPES
@@ -97,7 +98,6 @@ class URLBuilder:
             entries.append(anime_entries)
 
         return entries
-
 
 
 class Scraper:

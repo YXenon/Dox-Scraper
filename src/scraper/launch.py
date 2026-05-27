@@ -11,7 +11,14 @@ import aiohttp
 from camoufox import AsyncCamoufox
 from playwright.async_api import BrowserContext
 
-from shared.models import Metadata, RequestedMode, ScrapingRequests, TelegramFile
+from shared.models import (
+    Metadata,
+    AnimeMode,
+    RequestedMode,
+    ScrapingRequests,
+    TelegramFile,
+    ScrapedAnime,
+)
 from shared.mongo import init_mongo
 
 from .anilist import Anilist
@@ -21,22 +28,13 @@ from .proxy import ProxyServer
 from .providers.anikoto import URLBuilder, Scraper
 from core.handlers.process import app_ctx
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 TEMP_DIR = Path("./temp")
 RECORD_FILE = Path("record.json")
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _clear_temp() -> None:
-    """Remove the temp directory and all its contents if it exists."""
     try:
         shutil.rmtree(TEMP_DIR)
     except FileNotFoundError:
@@ -46,13 +44,6 @@ def _clear_temp() -> None:
 async def _load_or_generate_anime_list(
     tracker: ProgressTracker,
 ) -> tuple[int, int, list]:
-    """
-    Return saved progress if available, otherwise generate a fresh anime list.
-
-    Each item in the returned list has the shape::
-
-        {"info": <anilist dict>, "entries": <list of episode entry dicts>}
-    """
     page, index, items = tracker.load()
     if items:
         return page, index, items
@@ -60,7 +51,7 @@ async def _load_or_generate_anime_list(
     raw_anime_list = await Anilist().generate(page, 1)
     grouped_entries = URLBuilder(anime_list=raw_anime_list).build()
 
-    anime_list: list[dict[str, list[dict[str, str]] | dict[str, Any]]] = [
+    anime_list = [
         {"info": data, "entries": entry}
         for data, entry in zip(raw_anime_list, grouped_entries)
     ]
@@ -68,17 +59,6 @@ async def _load_or_generate_anime_list(
 
 
 async def _upload_to_telegram(metadata: Metadata) -> tuple[bool, Any, Any]:
-    """
-    Serialize metadata and send it to the Telegram uploader process via a queue.
-
-    Blocks until the uploader acknowledges completion on the ok queue.
-
-    Returns
-    -------
-    success    : True when the uploader reports job=upload, status=done.
-    channel_id : Telegram channel ID the file was sent to.
-    msg_id     : Message ID of the uploaded file.
-    """
     loop = asyncio.get_event_loop()
     app_ctx.scraper_conn.send(metadata.model_dump_json())
     response: dict = await loop.run_in_executor(None, app_ctx.scraper_conn.recv)
@@ -90,24 +70,16 @@ async def _upload_to_telegram(metadata: Metadata) -> tuple[bool, Any, Any]:
 def _compute_remaining_track(
     anime_list: list, anime_index: int, entry_index: int
 ) -> list:
-    """
-    Return a deep-copied slice of ``anime_list`` starting from the entry that
-    follows ``entry_index`` within ``anime_index``.
-
-    If the current anime has no remaining entries after the slice, the next
-    anime in the list is used as the starting point instead.
-    """
     remaining = copy.deepcopy(anime_list)
     remaining[anime_index]["index"] = entry_index
-
     return remaining
 
 
-def _queries(metadata: Metadata, anilist_info: dict):
-    file_name_queries: list[str] = Path(metadata.video).stem.split("_")
-    synonym_queries: list[str] = list(
+def _queries(metadata: Metadata, anilist_info: dict) -> list[str]:
+    file_name_queries = Path(metadata.video).stem.split("_")
+    synonym_queries = list(
         chain.from_iterable(
-            [synonym.split(" ") for synonym in anilist_info["info"]["synonyms"]]
+            synonym.split(" ") for synonym in anilist_info["info"]["synonyms"]
         )
     )
     return file_name_queries + synonym_queries
@@ -119,32 +91,21 @@ async def _scrape_convert_and_upload(
     session: aiohttp.ClientSession,
     anilist_info: dict,
 ) -> bool:
-    """
-    Run the full pipeline for a single episode entry:
-      1. Scrape HLS chunks from the provider page.
-      2. Merge and convert to MKV.
-      3. Upload to Telegram.
-      4. Persist the file reference in MongoDB.
-
-    Returns True on success (or when no metadata was returned), False if the
-    upload step fails so the caller can decide whether to abort.
-    """
-
     scraper = Scraper()
     metadata = await scraper.scrape(entry, browser_ctx, session)
 
     if not metadata:
-        logger.info("No metadata received for entry: %s", entry.get("name"))
+        logger.info("No metadata for entry: %s", entry.get("name"))
         return True
 
     logger.info("Merging & converting to MKV")
     metadata = await convert(metadata)
 
-    logger.info("Sending data to uploader process")
+    logger.info("Sending to uploader")
     success, channel_id, msg_id = await _upload_to_telegram(metadata)
 
     if not success:
-        logger.warning("Uploader reported failure for entry: %s", entry.get("name"))
+        logger.warning("Upload failed for: %s", entry.get("name"))
         return False
 
     try:
@@ -154,10 +115,22 @@ async def _scrape_convert_and_upload(
             queries=_queries(metadata, anilist_info),
             anilist_id=anilist_info["info"]["id"],
         ).create()
+
+        info = anilist_info["info"]
+        anime_doc = await ScrapedAnime.get_or_create(
+            anilist_id=info["id"],
+            title=info["title"].get("english", ""),
+            is_airing=info.get("status") == "RELEASING",
+            anime_info=info,
+        )
+        if anime_doc:
+            await anime_doc.mark_scraped(
+                episode=entry["episode"],
+                content_type=entry.get("content_type", "sub"),
+            )
         logger.info("Saved to DB")
     except Exception:
-        logger.error("[mongo] Error saving to DB:")
-        print(traceback.format_exc())
+        logger.error("[mongo] Error saving to DB:\n%s", traceback.format_exc())
 
     return True
 
@@ -168,21 +141,18 @@ async def _scrape_convert_and_upload(
 
 
 async def _auto_scraping(ctx: BrowserContext, session: aiohttp.ClientSession) -> None:
-    """
-    Iterate over a generated (or resumed) anime list and scrape every episode.
 
-    Progress is saved after each successful entry so the job can be resumed
-    if interrupted. When the list is exhausted the page counter is incremented.
-    """
+    logger.info("Auto scraping requested")
+
     tracker = ProgressTracker(RECORD_FILE)
     page, index, anime_list = await _load_or_generate_anime_list(tracker)
 
     for i, anime in enumerate(anime_list[index:]):
         entries = anime["entries"]
-        entry_index = anime["index"]
+        entry_index = anime.get("index", 0)
         for j, entry in enumerate(entries[entry_index:]):
             logger.info(
-                "Scrape job: [entry %s/%s | anime %s/%s]",
+                "Auto scrape: [ep %s/%s | anime %s/%s]",
                 j + 1,
                 len(entries[entry_index:]),
                 i + 1,
@@ -190,23 +160,23 @@ async def _auto_scraping(ctx: BrowserContext, session: aiohttp.ClientSession) ->
             )
             success = await _scrape_convert_and_upload(entry, ctx, session, anime)
             if success:
-                tracker.save(page, _compute_remaining_track(anime_list, i, entry_index+j+1), i)
-        tracker.save(page, anime_list, index+i+1)
+                tracker.save(
+                    page,
+                    _compute_remaining_track(anime_list, i, entry_index + j + 1),
+                    i,
+                )
+        tracker.save(page, anime_list, index + i + 1)
 
     tracker.save(page + 1, None, 0)
 
 
-async def _requested_scraping(
+async def _single_scrape(
     ctx: BrowserContext,
     session: aiohttp.ClientSession,
     request: RequestedMode,
 ) -> bool:
-    """
-    Scrape a single user-requested episode.
-
-    Returns False if the anime could not be found or the provider is unsupported.
-    """
-    logger.info("New manual scrape request from Telegram")
+    """Scrape one specific episode. URL is built automatically if not provided."""
+    logger.info("Single episode scrape requested (provider=%s)", request.provider)
 
     if request.provider != "anikoto":
         logger.warning("Unsupported provider: %s", request.provider)
@@ -214,13 +184,81 @@ async def _requested_scraping(
 
     anime_info = await Anilist().find(ani_id=request.anilist_id)
     if not anime_info:
-        logger.warning("Anilist entry not found for ID: %s", request.anilist_id)
+        logger.warning("Anilist entry not found: %s", request.anilist_id)
         return False
 
     entry = URLBuilder().build_episode_entry(
-        anime_info, request.episode, request.content_type
+        anime_info,
+        request.episode,
+        request.content_type,
+        url=request.url or None,  # pass None → URLBuilder constructs it
     )
     return await _scrape_convert_and_upload(entry, ctx, session, {"info": anime_info})
+
+
+async def _anime_scrape(
+    ctx: BrowserContext,
+    session: aiohttp.ClientSession,
+    request: AnimeMode,
+) -> None:
+    """
+    Scrape all available (or missing) episodes for one anime.
+    Checks ScrapedAnime to skip already-done episodes.
+    """
+    logger.info("Full anime scrape requested (id=%s, provider=%s)", request.anilist_id, request.provider)
+
+    if request.provider != "anikoto":
+        logger.warning("Unsupported provider: %s", request.provider)
+        return
+
+    anime_info = await Anilist().find(ani_id=request.anilist_id)
+    if not anime_info:
+        logger.warning("Anilist entry not found: %s", request.anilist_id)
+        return
+
+    is_airing = anime_info.get("status") == "RELEASING"
+
+    anime_doc = await ScrapedAnime.get_or_create(
+        anilist_id=request.anilist_id,
+        title=anime_info.get("title", ""),
+        is_airing=is_airing,
+        anime_info=anime_info,
+    )
+
+    if anime_doc is None:
+        logger.warning(
+            "Could not resolve episode count for anilist_id=%s, skipping",
+            request.anilist_id,
+        )
+        return
+
+    # Retry previously failed episodes first, then missing ones
+    entries = []
+    for content_type in ("sub", "dub"):
+        failed = list(anime_doc.failed(content_type))
+        missing = anime_doc.missing_episodes(content_type)
+        episodes_to_scrape = sorted(set(failed + missing))
+
+        if not episodes_to_scrape:
+            logger.info(
+                "Nothing to scrape for anilist_id=%s (%s)",
+                request.anilist_id,
+                content_type,
+            )
+            return
+
+        entries += [
+            URLBuilder().build_episode_entry(anime_info, ep, content_type)
+            for ep in episodes_to_scrape
+        ]
+
+    for i, entry in enumerate(entries):
+        logger.info("Anime scraping: (%s/%s)", i+1, len(entries))
+
+        ok = await _scrape_convert_and_upload(entry, ctx, session, {"info": anime_info})
+        if not ok:
+            await anime_doc.mark_failed(int(entry["episode"]), str(entry["content_type"]))
+            break
 
 
 # ---------------------------------------------------------------------------
@@ -230,10 +268,8 @@ async def _requested_scraping(
 
 async def scrape_job() -> None:
     """
-    Main scraping loop.
-
-    Sets up the proxy server and browser, then continuously polls the scrape
-    queue and dispatches to either automatic or requested scraping mode.
+    Entrypoint function for scrape job, requests can only be made through the telegram client.
+    Currently there are 3 modes - auto, single episode request, full anime request.
     """
     _clear_temp()
     await init_mongo()
@@ -249,7 +285,7 @@ async def scrape_job() -> None:
         aiohttp.ClientSession() as session,
     ):
         try:
-            ctx = await browser.new_context()
+            ctx = await browser.new_context() # type: ignore
 
             while True:
                 if app_ctx.scrape_q.empty():
@@ -260,7 +296,9 @@ async def scrape_job() -> None:
 
                 if item.mode == "auto":
                     await _auto_scraping(ctx, session)
-                else:
-                    await _requested_scraping(ctx, session, item)
+                elif item.mode == "request":
+                    await _single_scrape(ctx, session, item)
+                elif item.mode == "anime":
+                    await _anime_scrape(ctx, session, item)
         finally:
             pass
