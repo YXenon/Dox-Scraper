@@ -37,6 +37,7 @@ from core.handlers.process import app_ctx
 TEMP_DIR = Path("./temp")
 RECORD_FILE = Path("record.json")
 CONTENT_TYPES = ("sub", "dub")
+DEFAULT_PROVIDER = "anikoto"
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ async def _load_or_generate_anime_list(
     Return (page, index, anime_list) from saved progress if it exists,
     otherwise fetch a fresh list from AniList and build episode URLs.
     """
-    URLBuilder, _ = _load_provider("anikoto")
+    URLBuilder, _ = _load_provider(DEFAULT_PROVIDER)
 
     page, index, items = tracker.load()
     if items:
@@ -191,7 +192,7 @@ async def _auto_scraping(ctx: BrowserContext, session: aiohttp.ClientSession) ->
     """
     logger.info("Auto scraping requested")
 
-    _, Scraper = _load_provider("anikoto")
+    _, Scraper = _load_provider(DEFAULT_PROVIDER)
     tracker = ProgressTracker(RECORD_FILE)
     page, index, anime_list = await _load_or_generate_anime_list(tracker)
 
