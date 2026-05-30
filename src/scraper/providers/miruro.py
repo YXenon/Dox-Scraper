@@ -40,7 +40,7 @@ PROVIDER_ORIGIN: str = "https://miruro.bz"
 PROVIDER: str = f"{PROVIDER_ORIGIN}/watch/"
 
 MIRURO_PLAYER_WAIT = 5
-
+# Miruro doesn't load files very easily, so we have to wait for a lil while longer for all the files, this issue is Miruro only, so other providers are unaffected.
 
 # ---------------------------------------------------------------------------
 # URL builder

@@ -217,10 +217,10 @@ async def _auto_scraping(ctx: BrowserContext, session: aiohttp.ClientSession) ->
                 "Could not resolve episode count for anilist_id=%s, skipping",
                 anime_info["id"],
             )
-            return
+            continue
 
         if all(anime_doc.is_complete(content_type) for content_type in CONTENT_TYPES):
-            return
+            continue
 
         entries = anime["entries"]
         entry_index = anime.get("index", 0)
@@ -237,7 +237,7 @@ async def _auto_scraping(ctx: BrowserContext, session: aiohttp.ClientSession) ->
             )
 
             # Skip if this episode was already successfully scraped
-            if entry["episode_id"] in anime_doc.scraped(entry["content_type"]):
+            if entry["episode"] in anime_doc.scraped(entry["content_type"]):
                 success = True
             else:
                 success = await _scrape_convert_and_upload(
