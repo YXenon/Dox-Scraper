@@ -48,7 +48,7 @@ A multi-connection anime scraping pipeline along with telegram client to store t
 2. Create virtual environment and [activate it according to your operating system](https://docs.python.org/3/library/venv.html#how-venvs-work).
 
    ```sh
-   python -m venv # (using pure python)
+   python -m venv .venv # (using pure python)
    uv venv # (using uv)
    ```
 
