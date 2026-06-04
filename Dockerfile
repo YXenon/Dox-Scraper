@@ -18,7 +18,7 @@ ARG UID=10001
 RUN adduser \
     --disabled-password \
     --gecos "" \
-    --home "/nonexistent" \
+    --home "/app" \
     --shell "/sbin/nologin" \
     --no-create-home \
     --uid "${UID}" \
@@ -35,15 +35,16 @@ RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 #     --mount=type=bind,source=requirements.txt,target=requirements.txt \
 #     python -m pip install -r requirements.txt
 RUN python -m pip install uv
-RUN uv run camoufox fetch
-RUN uv sync
-
-
-# Switch to the non-privileged user to run the application.
-USER appuser
 
 # Copy the source code into the container.
 COPY . .
 
+RUN chown -R appuser /app
+
+# Switch to the non-privileged user to run the application.
+USER appuser
+
+RUN uv sync --no-cache
+
 # Run the application.
-CMD python src/main.py
+CMD .venv/bin/python src/main.py

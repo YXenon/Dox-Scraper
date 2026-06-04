@@ -1,9 +1,9 @@
-from constants import SCRAPE_PROVIDERS
+from constants import DEV_ID, SCRAPE_PROVIDERS
 from telegram.handlers.commands import Command
 from telethon import TelegramClient
 from telethon.tl.custom.message import Message
 
-@Command(name="providers")
+@Command(name="providers", allowed=[DEV_ID])
 async def providers(event: Message, client: TelegramClient):
     response = "Providers:\n"
     for provider in SCRAPE_PROVIDERS:

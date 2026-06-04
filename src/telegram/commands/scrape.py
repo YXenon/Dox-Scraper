@@ -1,6 +1,6 @@
 from typing import Any
 
-from constants import SCRAPE_PROVIDERS
+from constants import SCRAPE_PROVIDERS, DEV_ID
 from shared.models import AutoMode, RequestedMode, AnimeMode
 from telegram.handlers.commands import Command
 from telethon import TelegramClient
@@ -52,7 +52,7 @@ def _is_url(s: str) -> bool:
     return s.startswith("https://")
 
 
-@Command(name="scrape", allowed=[1314824862])
+@Command(name="scrape", allowed=[DEV_ID])
 async def scrape(event: Message, client: TelegramClient):
     group: str = event.pattern_match.group(1)  # type: ignore
     if not group:

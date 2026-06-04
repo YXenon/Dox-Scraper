@@ -8,9 +8,9 @@ load_dotenv()
 API_ID = int(getenv("API_ID", ""))
 API_HASH = getenv("API_HASH", "")
 BOT_TOKEN = getenv("BOT_TOKEN", "")
-DEVS = []
 STORE_CHANNEL_ID = int(getenv("STORE_CHANNEL_ID", "0"))
 MONGO_URI = getenv("MONGO_URI")
+DEV_ID = int(getenv("DEV_ID", "0"))
 
 SCRAPE_PROVIDERS = [
     file.stem
