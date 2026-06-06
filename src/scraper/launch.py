@@ -1,8 +1,6 @@
 import asyncio
 import copy
-import importlib
 import logging
-import shutil
 import traceback
 from itertools import chain
 from pathlib import Path
@@ -28,6 +26,7 @@ from .converter import convert
 from .progress import ProgressTracker
 from .proxy import ProxyServer
 from core.handlers.process import app_ctx
+from .utils import _clear_temp, _load_provider
 
 
 # ---------------------------------------------------------------------------
@@ -40,27 +39,6 @@ CONTENT_TYPES = ("sub", "dub")
 DEFAULT_PROVIDER = "anikoto"
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------------------
-
-def _clear_temp() -> None:
-    """Remove the temporary working directory, ignoring it if it doesn't exist."""
-    try:
-        shutil.rmtree(TEMP_DIR)
-    except FileNotFoundError:
-        pass
-
-
-def _load_provider(provider: str):
-    """
-    Dynamically import a scraping provider module and return its
-    URLBuilder and Scraper classes.
-    """
-    module = importlib.import_module(f".providers.{provider}", package=__package__)
-    return module.URLBuilder, module.Scraper
 
 
 async def _load_or_generate_anime_list(

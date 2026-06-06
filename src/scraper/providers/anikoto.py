@@ -12,7 +12,6 @@ Provider details
   invalid / unavailable episode.
 """
 
-import shutil
 import traceback
 from urllib.parse import quote
 
@@ -21,6 +20,7 @@ from camoufox.async_api import BrowserContext  # type: ignore
 from pathvalidate import sanitize_filename
 
 from scraper.base import BaseScraper, _BASE_PLAYER_WAIT, _MAX_ATTEMPTS, _PLAYER_WAIT_INCREMENT
+from scraper.utils import _clear_temp
 from shared.models import Metadata
 
 import asyncio
@@ -221,11 +221,11 @@ class Scraper(BaseScraper):
 
                 # No video stream detected — clean up the temp directory.
                 if metadata.dir:
-                    shutil.rmtree(metadata.dir)
+                    _clear_temp()
 
             except Exception:
                 self._logger.error("[scrape] Error for '%s':", target.get("name"))
                 print(traceback.format_exc())
                 if metadata.dir:
-                    shutil.rmtree(metadata.dir)
+                    _clear_temp()
                 return None

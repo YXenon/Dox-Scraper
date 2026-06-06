@@ -16,7 +16,6 @@ Provider details
 """
 
 import asyncio
-import shutil
 import traceback
 from secrets import choice
 from string import ascii_letters
@@ -28,6 +27,7 @@ from pathvalidate import sanitize_filename
 from playwright.async_api import Page
 
 from scraper.base import BaseScraper, _BASE_PLAYER_WAIT, _MAX_ATTEMPTS, _PLAYER_WAIT_INCREMENT
+from scraper.utils import _clear_temp
 from shared.models import Metadata
 
 # ---------------------------------------------------------------------------
@@ -309,11 +309,11 @@ class Scraper(BaseScraper):
 
                 # No video stream detected — clean up the temp directory.
                 if metadata.dir:
-                    shutil.rmtree(metadata.dir)
+                    _clear_temp()
 
             except Exception:
                 self._logger.error("[scrape] Error for '%s':", target.get("name"))
                 print(traceback.format_exc())
                 if metadata.dir:
-                    shutil.rmtree(metadata.dir)
+                    _clear_temp()
                 return None
