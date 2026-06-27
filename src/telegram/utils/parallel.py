@@ -2,7 +2,7 @@
 # Added features: smarter chunk handling, non-rate-limiting progress callbacks,
 # and parallel multi-DC connection management.
 # Note: Claude has been used only to make the code more readable,
-# all the functionalities were written by https://github.com/Kulin-Soni
+# all the functionalities were written by https://github.com/YXenon
 
 import asyncio
 import hashlib

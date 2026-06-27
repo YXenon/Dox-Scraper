@@ -16,7 +16,6 @@ Shared responsibilities handled here:
 """
 
 import asyncio
-import logging
 import re
 import traceback
 from abc import ABC, abstractmethod
@@ -27,7 +26,8 @@ import aiohttp
 from camoufox.async_api import BrowserContext  # type: ignore
 from tqdm.asyncio import tqdm
 
-from shared.models import Metadata
+from shared.logger import log
+# from shared.models import Metadata
 
 # ---------------------------------------------------------------------------
 # Module-level constants
@@ -82,7 +82,7 @@ class BaseScraper(ABC):
         self._output_dir: Path | None = None
         self._metadata: Metadata = Metadata()
         self._media_found: bool = False
-        self._logger: logging.Logger = logging.getLogger(self.__class__.__module__)
+        self._logger = log
 
     # ------------------------------------------------------------------
     # Request headers (built on demand so PROVIDER_ORIGIN is always current)
